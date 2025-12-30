@@ -80,9 +80,52 @@ map('n', '<leader>ba', function()
   -- Close all buffers except the current one
   local current_buf = vim.api.nvim_get_current_buf()
   local buffers = vim.api.nvim_list_bufs()
+  
+  local function close_buffer(buf)
+    local is_modified = vim.api.nvim_buf_get_option(buf, "modified")
+    
+    if not is_modified then
+      -- Unmodified buffer: delete without force
+      vim.api.nvim_buf_delete(buf, { force = false })
+    else
+      -- Modified buffer: prompt user
+      local buf_name = vim.api.nvim_buf_get_name(buf)
+      if buf_name == "" then
+        buf_name = "[No Name]"
+      else
+        buf_name = vim.fn.fnamemodify(buf_name, ":t")
+      end
+      
+      vim.ui.select(
+        { "Save", "Discard", "Skip" },
+        {
+          prompt = string.format("Buffer '%s' has unsaved changes:", buf_name),
+        },
+        function(choice)
+          if choice == "Save" then
+            -- Save the buffer first
+            vim.api.nvim_buf_call(buf, function()
+              local success = pcall(vim.cmd, "write")
+              if success then
+                -- Only delete if save succeeded
+                vim.api.nvim_buf_delete(buf, { force = false })
+              else
+                vim.notify("Failed to save buffer. Buffer not closed.", vim.log.levels.WARN)
+              end
+            end)
+          elseif choice == "Discard" then
+            -- Delete with force (discard changes)
+            vim.api.nvim_buf_delete(buf, { force = true })
+          end
+          -- If choice is "Skip", do nothing (buffer remains open)
+        end
+      )
+    end
+  end
+  
   for _, buf in ipairs(buffers) do
     if vim.api.nvim_buf_is_valid(buf) and buf ~= current_buf then
-      vim.api.nvim_buf_delete(buf, { force = true })
+      close_buffer(buf)
     end
   end
 end, opts)  -- Close all buffers except current

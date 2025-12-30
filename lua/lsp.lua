@@ -162,34 +162,133 @@ local function setup_lsp()
       return -- Don't try to setup if not available
     end
     
+    -- Try to find global TypeScript installation as fallback
+    local function find_global_typescript()
+      -- First, try to find via npm in current environment (respects NVM)
+      local npm_global = vim.fn.system('npm root -g 2>/dev/null'):gsub('%s+', '')
+      if npm_global and npm_global ~= '' then
+        local ts_path = npm_global .. '/typescript'
+        if vim.fn.isdirectory(ts_path) == 1 then
+          return ts_path
+        end
+      end
+      
+      -- Try to find in current Node version's lib (for NVM users)
+      local node_path = vim.fn.system('which node 2>/dev/null'):gsub('%s+', '')
+      if node_path and node_path ~= '' then
+        -- Extract Node version path from binary location
+        local node_dir = vim.fn.fnamemodify(node_path, ':h:h')
+        local ts_path = node_dir .. '/lib/node_modules/typescript'
+        if vim.fn.isdirectory(ts_path) == 1 then
+          return ts_path
+        end
+      end
+      
+      -- Search all NVM versions (fallback)
+      local nvm_base = vim.fn.expand('~/.nvm/versions/node')
+      if vim.fn.isdirectory(nvm_base) == 1 then
+        -- Use find command to locate TypeScript in any NVM version
+        local find_cmd = string.format('find %s -maxdepth 3 -type d -name "typescript" -path "*/node_modules/typescript" 2>/dev/null | head -1', nvm_base)
+        local found_path = vim.fn.system(find_cmd):gsub('%s+', '')
+        if found_path and found_path ~= '' and vim.fn.isdirectory(found_path) == 1 then
+          return found_path
+        end
+      end
+      
+      -- Common global TypeScript locations (fallback)
+      local possible_paths = {
+        vim.fn.expand('~/.npm-global/lib/node_modules/typescript'),
+        '/usr/local/lib/node_modules/typescript',
+        '/opt/homebrew/lib/node_modules/typescript', -- Homebrew on macOS
+      }
+      
+      for _, path in ipairs(possible_paths) do
+        if vim.fn.isdirectory(path) == 1 then
+          return path
+        end
+      end
+      
+      return nil
+    end
+    
+    local global_ts_path = find_global_typescript()
+    
+    if global_ts_path then
+      vim.notify('TypeScript LSP: Found global TypeScript at ' .. global_ts_path, vim.log.levels.INFO)
+    else
+      vim.notify(
+        'TypeScript LSP: No global TypeScript found. ' ..
+        'Install with: npm install -g typescript ' ..
+        '(or in workspace: npm install typescript)',
+        vim.log.levels.WARN
+      )
+    end
+    
     local config = {
       cmd = { 'typescript-language-server', '--stdio' },
       filetypes = { 'javascript', 'javascriptreact', 'typescript', 'typescriptreact' },
       root_markers = { 'package.json', 'tsconfig.json', 'jsconfig.json', '.git' },
       on_attach = on_attach,
       capabilities = capabilities,
-      -- Use default root detection (more reliable)
-      -- Remove custom root_dir to let Neovim handle it automatically
-      -- Settings to handle TypeScript installation gracefully
       settings = {
         typescript = {
-          -- Try to use workspace TypeScript, but don't fail if not found
-          prefer = { 'workspace' },
+          -- Try workspace first, then fallback to bundled
+          prefer = { 'workspace', 'bundled' },
         },
         javascript = {
-          prefer = { 'workspace' },
+          prefer = { 'workspace', 'bundled' },
         },
       },
       init_options = {
         hostInfo = 'neovim',
+        -- Set tsserver.path in init_options (this is what typescript-language-server expects)
+        tsserver = global_ts_path and {
+          path = global_ts_path,
+        } or nil,
       },
     }
     
     vim.lsp.config('ts_ls', config)
-    vim.lsp.enable('ts_ls')
+    
+    -- Set up error handler for LSP client errors
+    vim.api.nvim_create_autocmd('User', {
+      pattern = 'LspAttach',
+      callback = function(event)
+        local client = vim.lsp.get_client_by_id(event.data.client_id)
+        if client and client.name == 'ts_ls' then
+          -- Monitor for initialization errors
+          vim.schedule(function()
+            -- Check if client is still valid after a short delay
+            vim.defer_fn(function()
+              local clients = vim.lsp.get_clients({ name = 'ts_ls' })
+              if #clients == 0 then
+                vim.notify(
+                  'TypeScript LSP failed to initialize. ' ..
+                  'Install TypeScript in workspace: npm install typescript ' ..
+                  '(or globally: npm install -g typescript)',
+                  vim.log.levels.WARN
+                )
+              end
+            end, 1000)
+          end)
+        end
+      end,
+    })
+    
+    -- Wrap enable in error handling to catch initialization failures
+    local ok_enable, enable_err = pcall(function()
+      vim.lsp.enable('ts_ls')
+    end)
+    if not ok_enable then
+      vim.notify(
+        'TypeScript LSP failed to enable: ' .. tostring(enable_err) ..
+        '. Ensure TypeScript is installed in workspace or globally.',
+        vim.log.levels.WARN
+      )
+    end
   end)
   if not ok_ts then
-    vim.notify('Failed to setup ts_ls: ' .. tostring(err_ts), vim.log.levels.ERROR)
+    vim.notify('Failed to setup ts_ls: ' .. tostring(err_ts), vim.log.levels.WARN)
   end
   
   -- JSON LSP
@@ -253,3 +352,8 @@ end
 vim.schedule(function()
   vim.defer_fn(setup_lsp, 200) -- 200ms delay
 end)
+
+-- Note: If you see TypeScript LSP errors about missing TypeScript installation,
+-- install TypeScript in your workspace: npm install typescript
+-- Or globally: npm install -g typescript
+-- The LSP will automatically use workspace TypeScript if available, or fallback to bundled/global

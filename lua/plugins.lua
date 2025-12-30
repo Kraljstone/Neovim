@@ -479,51 +479,101 @@ return require('packer').startup(function(use)
     'sindrets/diffview.nvim',
     requires = { 'nvim-lua/plenary.nvim' },
     config = function()
-      -- Aggressively patch diffview's error handling before it's used
-      -- This must happen after diffview is loaded but before it's used
-      vim.schedule(function()
-        vim.defer_fn(function()
-          -- Patch all possible error paths in diffview
-          local modules_to_patch = {
-            'diffview.buffer',
-            'diffview.utils',
-            'diffview.log',
-            'diffview.lib',
-          }
-          
-          for _, module_name in ipairs(modules_to_patch) do
-            local ok, module = pcall(require, module_name)
-            if ok and module then
-              -- Patch error function if it exists
-              if module.error and type(module.error) == 'function' then
-                local original = module.error
-                module.error = function(msg, ...)
-                  if type(msg) == 'string' and msg:match('Failed to create diff buffer') then
-                    return
-                  end
-                  return original(msg, ...)
+      -- WARNING: Fragile monkey-patching of diffview internals
+      -- This patches internal module functions (error, create_diff_buffer) which may break
+      -- on plugin updates. Module paths (diffview.buffer, diffview.utils, etc.) are
+      -- implementation details and not part of the public API.
+      --
+      -- TODO: Consider opening an issue upstream at https://github.com/sindrets/diffview.nvim
+      -- to request official configuration options for handling "Failed to create diff buffer"
+      -- errors that occur when diffview tries to diff files in git index that can't be accessed.
+      --
+      -- This workaround suppresses errors for files that can't be diffed (e.g., binary files,
+      -- files in git index that are inaccessible). A better solution would be proper error
+      -- handling in diffview itself.
+      
+      local function try_patch_modules()
+        local modules_to_patch = {
+          'diffview.buffer',
+          'diffview.utils',
+          'diffview.log',
+          'diffview.lib',
+        }
+        
+        local patched_count = 0
+        for _, module_name in ipairs(modules_to_patch) do
+          local ok, module = pcall(require, module_name)
+          if ok and module then
+            -- Patch error function if it exists and hasn't been patched
+            if module.error and type(module.error) == 'function' and not module._error_patched then
+              local original = module.error
+              module.error = function(msg, ...)
+                if type(msg) == 'string' and msg:match('Failed to create diff buffer') then
+                  return
                 end
+                return original(msg, ...)
               end
-              
-              -- Patch create_diff_buffer if it exists
-              if module.create_diff_buffer and type(module.create_diff_buffer) == 'function' then
-                local original = module.create_diff_buffer
-                module.create_diff_buffer = function(...)
-                  local ok_create, result = pcall(original, ...)
-                  if not ok_create then
-                    local err = tostring(result)
-                    if err:match('Failed to create diff buffer') then
-                      return nil
-                    end
-                    error(result)
+              module._error_patched = true
+              patched_count = patched_count + 1
+            end
+            
+            -- Patch create_diff_buffer if it exists and hasn't been patched
+            if module.create_diff_buffer and type(module.create_diff_buffer) == 'function' and not module._create_diff_buffer_patched then
+              local original = module.create_diff_buffer
+              module.create_diff_buffer = function(...)
+                local ok_create, result = pcall(original, ...)
+                if not ok_create then
+                  local err = tostring(result)
+                  if err:match('Failed to create diff buffer') then
+                    return nil
                   end
-                  return result
+                  error(result)
                 end
+                return result
               end
+              module._create_diff_buffer_patched = true
+              patched_count = patched_count + 1
             end
           end
-        end, 1000) -- Wait longer for diffview to fully initialize
+        end
+        
+        return patched_count > 0
+      end
+      
+      -- Try to patch modules with retry mechanism instead of arbitrary delay
+      -- This is more reliable than a fixed delay but still fragile
+      local function attempt_patch(retries_left)
+        if retries_left <= 0 then
+          -- Don't show warning - init.lua fallback will handle errors
+          -- The patching is optional and the error interception in init.lua should cover it
+          return
+        end
+        
+        local success = try_patch_modules()
+        if not success then
+          -- Retry after a short delay if modules aren't ready yet
+          vim.defer_fn(function()
+            attempt_patch(retries_left - 1)
+          end, 100)
+        end
+      end
+      
+      -- Try patching immediately after setup
+      vim.schedule(function()
+        attempt_patch(10) -- Try up to 10 times with 100ms delays (max 1 second)
       end)
+      
+      -- Also try patching when diffview is actually used (more reliable)
+      vim.api.nvim_create_autocmd('User', {
+        pattern = 'DiffviewViewOpened',
+        once = true,
+        callback = function()
+          -- Try patching one more time when diffview is actually opened
+          vim.schedule(function()
+            try_patch_modules()
+          end)
+        end,
+      })
       
       -- Function to enable scrollbind on all diff windows (defined early for scope)
       local function enable_scrollbind()
@@ -593,25 +643,48 @@ return require('packer').startup(function(use)
             ['k'] = function() require('diffview.actions').prev_entry() end,
             ['<CR>'] = function()
               local ok, err = pcall(function()
-              require('diffview.actions').select_entry()
-              -- Move focus to diff view (the actual file panes) after file opens
-              vim.schedule(function()
-                vim.defer_fn(function()
-                  -- Find and focus the first diff window
-                  local wins = vim.api.nvim_list_wins()
-                  for _, win in ipairs(wins) do
-                    if vim.api.nvim_win_is_valid(win) then
+                require('diffview.actions').select_entry()
+                -- Move focus to diff view after file opens
+                vim.schedule(function()
+                  -- Try to use diffview's built-in focus_files action first
+                  vim.defer_fn(function()
+                    local ok_focus, _ = pcall(function()
+                      require('diffview.actions').focus_files()
+                    end)
+                    
+                    -- If focus_files doesn't work, manually find and focus diff windows
+                    if not ok_focus then
+                      local wins = vim.api.nvim_list_wins()
+                      for _, win in ipairs(wins) do
+                        if vim.api.nvim_win_is_valid(win) then
+                          local ok_win, diff = pcall(vim.api.nvim_win_get_option, win, 'diff')
+                          if ok_win and diff then
+                            vim.api.nvim_set_current_win(win)
+                            enable_scrollbind()
+                            break
+                          end
+                        end
+                      end
+                    else
+                      enable_scrollbind()
+                    end
+                  end, 150)
+                  
+                  -- Backup: try again after longer delay
+                  vim.defer_fn(function()
+                    local wins = vim.api.nvim_list_wins()
+                    for _, win in ipairs(wins) do
+                      if vim.api.nvim_win_is_valid(win) then
                         local ok_win, diff = pcall(vim.api.nvim_win_get_option, win, 'diff')
                         if ok_win and diff then
-                        vim.api.nvim_set_current_win(win)
-                        -- Enable scrollbind after focusing
-                        enable_scrollbind()
-                        break
+                          vim.api.nvim_set_current_win(win)
+                          enable_scrollbind()
+                          break
+                        end
                       end
                     end
-                  end
-                end, 150)  -- Wait for diff view to be created
-              end)
+                  end, 300)
+                end)
               end)
               if not ok then
                 -- Silently handle errors - diffview will show its own error messages
@@ -652,20 +725,39 @@ return require('packer').startup(function(use)
         pattern = 'DiffviewFileOpened',
         callback = function()
           vim.schedule(function()
-            vim.defer_fn(function()
-              enable_scrollbind()
-              -- Focus the diff view after file opens
+            -- Function to focus diff view with retries
+            local function focus_diff_with_retry(attempt)
+              attempt = attempt or 0
+              if attempt > 5 then return end
+              
               local wins = vim.api.nvim_list_wins()
+              local found = false
+              
               for _, win in ipairs(wins) do
                 if vim.api.nvim_win_is_valid(win) then
                   local ok, diff = pcall(vim.api.nvim_win_get_option, win, 'diff')
                   if ok and diff then
                     vim.api.nvim_set_current_win(win)
+                    enable_scrollbind()
+                    found = true
                     break
                   end
                 end
               end
-            end, 100)
+              
+              -- Retry if not found
+              if not found then
+                vim.defer_fn(function()
+                  focus_diff_with_retry(attempt + 1)
+                end, 100)
+              end
+            end
+            
+            vim.defer_fn(function()
+              enable_scrollbind()
+              focus_diff_with_retry(0)
+            end, 50)
+            
             vim.defer_fn(enable_scrollbind, 200)
           end)
         end,
@@ -817,12 +909,12 @@ return require('packer').startup(function(use)
     end,
   }
 
-  -- Auto-save
+  -- Auto-save (disabled)
   use {
     'Pocco81/auto-save.nvim',
     config = function()
       require('auto-save').setup({
-        enabled = true,
+        enabled = false, -- Disabled - use manual save instead
         execution_message = {
           message = function()
             return 'Auto-saved at ' .. vim.fn.strftime('%H:%M:%S')
@@ -1058,6 +1150,9 @@ return require('packer').startup(function(use)
         formatters = {
           ['clang-format'] = {
             prepend_args = { '-style=file', '-fallback-style=LLVM' },
+          },
+          ['prettier'] = {
+            prepend_args = { '--single-quote' },
           },
         },
       })
