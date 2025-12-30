@@ -68,11 +68,30 @@ return require('packer').startup(function(use)
               ['<C-d>'] = false,
             },
           },
+          preview = {
+            check_mime_type = true,
+            timeout = 250,
+          },
+        },
+        pickers = {
+          buffers = {
+            previewer = false,  -- Disable preview for buffers to avoid invalid buffer errors
+            initial_mode = 'normal',
+          },
+          find_files = {
+            previewer = false,  -- Disable preview to avoid buffer errors
+          },
+          live_grep = {
+            previewer = false,  -- Disable preview to avoid buffer errors
+          },
+          oldfiles = {
+            previewer = false,  -- Disable preview to avoid buffer errors
+          },
         },
         extensions = {
           file_browser = {
             theme = 'ivy',
-            hijack_netrw = true,
+            hijack_netrw = false,  -- Disable to avoid conflict with nvim-tree
           },
         },
       })
@@ -85,7 +104,7 @@ return require('packer').startup(function(use)
     'stevearc/oil.nvim',
     config = function()
       require('oil').setup({
-        default_file_explorer = true,
+        default_file_explorer = false,  -- Disable to avoid conflict with nvim-tree
         columns = { 'icon' },
         view_options = {
           show_hidden = true,
@@ -94,71 +113,12 @@ return require('packer').startup(function(use)
     end,
   }
   
-  -- LSP (using native Neovim 0.11+ API)
+  -- LSP completion capabilities
   use {
     'hrsh7th/cmp-nvim-lsp',
     config = function()
-      -- Defer LSP setup to avoid initialization errors
+      -- Diagnostic configuration (can be set up early)
       vim.schedule(function()
-        local map = vim.keymap.set
-        local ok2, cmp_nvim_lsp = pcall(require, 'cmp_nvim_lsp')
-        if not ok2 then return end
-        
-        -- Setup completion capabilities
-        local capabilities = cmp_nvim_lsp.default_capabilities()
-        
-        -- LSP keymaps
-        local on_attach = function(client, bufnr)
-          local opts = { buffer = bufnr, noremap = true, silent = true }
-          
-          -- Go to definition (F12 like in Cursor/VS Code)
-          map('n', '<F12>', function()
-            local clients = vim.lsp.get_clients({ bufnr = bufnr })
-            if #clients == 0 then
-              vim.notify('No LSP client attached. Make sure language server is installed.', vim.log.levels.WARN)
-              return
-            end
-            vim.lsp.buf.definition()
-          end, opts)
-          map('n', 'gd', vim.lsp.buf.definition, opts)
-          map('n', 'gD', vim.lsp.buf.declaration, opts)
-          map('n', 'gi', vim.lsp.buf.implementation, opts)
-          map('n', 'gr', vim.lsp.buf.references, opts)
-          map('n', '<S-F12>', vim.lsp.buf.references, opts)  -- Shift+F12 for references
-          
-          -- Hover and signature help
-          map('n', 'K', vim.lsp.buf.hover, opts)
-          map('n', '<C-k>', vim.lsp.buf.signature_help, opts)
-          
-          -- Code actions
-          map('n', '<leader>rn', vim.lsp.buf.rename, opts)
-          map('n', '<leader>ca', vim.lsp.buf.code_action, opts)
-          
-          -- Formatting (now handled by conform.nvim, but keep as fallback)
-          -- map('n', '<leader>f', function() vim.lsp.buf.format { async = true } end, opts)
-          
-          -- Diagnostics
-          map('n', '[d', vim.diagnostic.goto_prev, opts)
-          map('n', ']d', vim.diagnostic.goto_next, opts)
-          map('n', '<leader>d', vim.diagnostic.open_float, opts)
-          
-          -- LSP status command
-          map('n', '<leader>ls', function()
-            local clients = vim.lsp.get_clients({ bufnr = bufnr })
-            if #clients == 0 then
-              vim.notify('No LSP clients attached to this buffer', vim.log.levels.INFO)
-            else
-              local msg = 'LSP clients: '
-              for i, client in ipairs(clients) do
-                msg = msg .. client.name
-                if i < #clients then msg = msg .. ', ' end
-              end
-              vim.notify(msg, vim.log.levels.INFO)
-            end
-          end, opts)
-        end
-        
-        -- Diagnostic configuration
         pcall(function()
           vim.diagnostic.config({
             virtual_text = true,
@@ -182,67 +142,6 @@ return require('packer').startup(function(use)
             local hl = 'DiagnosticSign' .. type
             vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = hl })
           end
-        end)
-        
-        -- Use native vim.lsp.config API (Neovim 0.11+)
-        -- TypeScript/JavaScript LSP
-        pcall(function()
-          vim.lsp.config({
-            name = 'ts_ls',
-            cmd = { 'typescript-language-server', '--stdio' },
-            filetypes = { 'javascript', 'javascriptreact', 'typescript', 'typescriptreact' },
-            root_markers = { 'package.json', 'tsconfig.json', 'jsconfig.json', '.git' },
-            on_attach = on_attach,
-            capabilities = capabilities,
-          })
-          vim.lsp.enable('ts_ls')
-        end)
-        
-        -- JSON LSP
-        pcall(function()
-          vim.lsp.config({
-            name = 'jsonls',
-            cmd = { 'vscode-json-language-server', '--stdio' },
-            filetypes = { 'json', 'jsonc' },
-            root_markers = { 'package.json', 'tsconfig.json', '.git' },
-            on_attach = on_attach,
-            capabilities = capabilities,
-          })
-          vim.lsp.enable('jsonls')
-        end)
-        
-        -- ESLint LSP
-        pcall(function()
-          vim.lsp.config({
-            name = 'eslint',
-            cmd = { 'vscode-eslint-language-server', '--stdio' },
-            filetypes = { 'javascript', 'javascriptreact', 'typescript', 'typescriptreact' },
-            root_markers = { '.eslintrc', '.eslintrc.js', '.eslintrc.json', 'package.json', '.git' },
-            on_attach = on_attach,
-            capabilities = capabilities,
-          })
-          vim.lsp.enable('eslint')
-        end)
-        
-        -- Lua LSP
-        pcall(function()
-          vim.lsp.config({
-            name = 'lua_ls',
-            cmd = { 'lua-language-server' },
-            filetypes = { 'lua' },
-            root_markers = { '.luarc.json', '.luarc.jsonc', '.git' },
-            on_attach = on_attach,
-            capabilities = capabilities,
-            settings = {
-              Lua = {
-                runtime = { version = 'LuaJIT' },
-                diagnostics = { globals = { 'vim' } },
-                workspace = { library = vim.api.nvim_get_runtime_file('', true) },
-                telemetry = { enable = false },
-              },
-            },
-          })
-          vim.lsp.enable('lua_ls')
         end)
       end)
     end,
@@ -580,6 +479,77 @@ return require('packer').startup(function(use)
     'sindrets/diffview.nvim',
     requires = { 'nvim-lua/plenary.nvim' },
     config = function()
+      -- Aggressively patch diffview's error handling before it's used
+      -- This must happen after diffview is loaded but before it's used
+      vim.schedule(function()
+        vim.defer_fn(function()
+          -- Patch all possible error paths in diffview
+          local modules_to_patch = {
+            'diffview.buffer',
+            'diffview.utils',
+            'diffview.log',
+            'diffview.lib',
+          }
+          
+          for _, module_name in ipairs(modules_to_patch) do
+            local ok, module = pcall(require, module_name)
+            if ok and module then
+              -- Patch error function if it exists
+              if module.error and type(module.error) == 'function' then
+                local original = module.error
+                module.error = function(msg, ...)
+                  if type(msg) == 'string' and msg:match('Failed to create diff buffer') then
+                    return
+                  end
+                  return original(msg, ...)
+                end
+              end
+              
+              -- Patch create_diff_buffer if it exists
+              if module.create_diff_buffer and type(module.create_diff_buffer) == 'function' then
+                local original = module.create_diff_buffer
+                module.create_diff_buffer = function(...)
+                  local ok_create, result = pcall(original, ...)
+                  if not ok_create then
+                    local err = tostring(result)
+                    if err:match('Failed to create diff buffer') then
+                      return nil
+                    end
+                    error(result)
+                  end
+                  return result
+                end
+              end
+            end
+          end
+        end, 1000) -- Wait longer for diffview to fully initialize
+      end)
+      
+      -- Function to enable scrollbind on all diff windows (defined early for scope)
+      local function enable_scrollbind()
+        local wins = vim.api.nvim_list_wins()
+        local diff_wins = {}
+        
+        -- Collect all diff windows
+        for _, win in ipairs(wins) do
+          if vim.api.nvim_win_is_valid(win) then
+            local ok, diff = pcall(vim.api.nvim_win_get_option, win, 'diff')
+            if ok and diff then
+              table.insert(diff_wins, win)
+            end
+          end
+        end
+        
+        -- Enable scrollbind on all diff windows at once
+        if #diff_wins > 1 then
+          for _, win in ipairs(diff_wins) do
+            vim.api.nvim_win_set_option(win, 'scrollbind', true)
+            vim.api.nvim_win_set_option(win, 'cursorbind', true)
+          end
+        end
+      end
+      
+      -- Setup diffview with hooks to suppress buffer creation errors
       require('diffview').setup({
         view = {
           -- Make the file list sidebar wider
@@ -609,6 +579,110 @@ return require('packer').startup(function(use)
             height = 16,
           },
         },
+        keymaps = {
+          view = {
+            -- Navigate through changes
+            ['[c'] = function() require('diffview.actions').prev_conflict() end,
+            [']c'] = function() require('diffview.actions').next_conflict() end,
+            ['[x'] = function() require('diffview.actions').prev_conflict() end,
+            [']x'] = function() require('diffview.actions').next_conflict() end,
+          },
+          file_panel = {
+            -- Navigate files
+            ['j'] = function() require('diffview.actions').next_entry() end,
+            ['k'] = function() require('diffview.actions').prev_entry() end,
+            ['<CR>'] = function()
+              local ok, err = pcall(function()
+              require('diffview.actions').select_entry()
+              -- Move focus to diff view (the actual file panes) after file opens
+              vim.schedule(function()
+                vim.defer_fn(function()
+                  -- Find and focus the first diff window
+                  local wins = vim.api.nvim_list_wins()
+                  for _, win in ipairs(wins) do
+                    if vim.api.nvim_win_is_valid(win) then
+                        local ok_win, diff = pcall(vim.api.nvim_win_get_option, win, 'diff')
+                        if ok_win and diff then
+                        vim.api.nvim_set_current_win(win)
+                        -- Enable scrollbind after focusing
+                        enable_scrollbind()
+                        break
+                      end
+                    end
+                  end
+                end, 150)  -- Wait for diff view to be created
+              end)
+              end)
+              if not ok then
+                -- Silently handle errors - diffview will show its own error messages
+              end
+            end,
+            ['o'] = function() require('diffview.actions').select_entry() end,
+            ['<Tab>'] = function() require('diffview.actions').focus_entry() end,
+          },
+        },
+        -- Configuration to handle new files and suppress errors
+        diff_binaries = false,
+        enhanced_diff_hl = false,
+        use_icons = true,
+        show_help_hints = false,
+        -- Hooks to catch and suppress buffer creation errors
+        hooks = {
+          diff_buf_read = function()
+            -- Suppress errors silently
+          end,
+        },
+      })
+      
+      -- Enable synchronized scrolling when diffview opens
+      vim.api.nvim_create_autocmd('User', {
+        pattern = 'DiffviewViewOpened',
+        callback = function()
+          -- Try multiple times with delays to catch all windows
+          vim.schedule(function()
+            vim.defer_fn(enable_scrollbind, 50)
+            vim.defer_fn(enable_scrollbind, 150)
+            vim.defer_fn(enable_scrollbind, 300)
+          end)
+        end,
+      })
+      
+      -- Also enable when files are opened in diffview
+      vim.api.nvim_create_autocmd('User', {
+        pattern = 'DiffviewFileOpened',
+        callback = function()
+          vim.schedule(function()
+            vim.defer_fn(function()
+              enable_scrollbind()
+              -- Focus the diff view after file opens
+              local wins = vim.api.nvim_list_wins()
+              for _, win in ipairs(wins) do
+                if vim.api.nvim_win_is_valid(win) then
+                  local ok, diff = pcall(vim.api.nvim_win_get_option, win, 'diff')
+                  if ok and diff then
+                    vim.api.nvim_set_current_win(win)
+                    break
+                  end
+                end
+              end
+            end, 100)
+            vim.defer_fn(enable_scrollbind, 200)
+          end)
+        end,
+      })
+      
+      -- Backup: enable scrollbind when entering diff windows
+      vim.api.nvim_create_autocmd({ 'WinEnter', 'BufWinEnter', 'WinNew' }, {
+        callback = function()
+          if vim.wo.diff then
+            vim.wo.scrollbind = true
+            vim.wo.cursorbind = true
+            -- Also trigger the function to sync all windows
+            vim.schedule(function()
+              enable_scrollbind()
+            end)
+          end
+        end,
       })
     end,
   }
@@ -743,6 +817,116 @@ return require('packer').startup(function(use)
     end,
   }
 
+  -- Auto-save
+  use {
+    'Pocco81/auto-save.nvim',
+    config = function()
+      require('auto-save').setup({
+        enabled = true,
+        execution_message = {
+          message = function()
+            return 'Auto-saved at ' .. vim.fn.strftime('%H:%M:%S')
+          end,
+          dim = 0.18,
+          cleaning_interval = 1250,
+        },
+        trigger_events = { 'InsertLeave', 'TextChanged' },
+        conditions = {
+          exists = true,
+          file_is_not_a_directory = true,
+          modifiable = true,
+        },
+        write_all_buffers = false,
+        on_off_commands = true,
+        clean_command_line_interval = 0,
+        debounce_delay = 135,
+      })
+    end,
+  }
+
+  -- Undo tree visualization
+  use {
+    'mbbill/undotree',
+    config = function()
+      vim.g.undotree_SetFocusOnToggle = true
+      vim.g.undotree_WindowLayout = 3
+    end,
+  }
+
+  -- Project management
+  -- Note: This plugin uses deprecated vim.lsp.buf_get_clients() API
+  -- Update with :PackerSync to get the latest version which may have a fix
+  use {
+    'ahmedkhalf/project.nvim',
+    config = function()
+      require('project_nvim').setup({
+        detection_methods = { 'pattern' },  -- Removed 'lsp' to avoid deprecated API usage
+        patterns = { '.git', '_darcs', '.hg', '.bzr', '.svn', 'Makefile', 'package.json', '.sln' },
+        ignore_lsp = { '*' },  -- Ignore all LSP clients to prevent deprecated API calls
+        exclude_dirs = {},
+        show_hidden = false,
+        silent_chdir = true,
+        scope_chdir = 'global',
+        datapath = vim.fn.stdpath('data'),
+      })
+    end,
+  }
+
+  -- Better quickfix list
+  use {
+    'kevinhwang91/nvim-bqf',
+    ft = 'qf',
+    config = function()
+      require('bqf').setup({
+        auto_enable = true,
+        preview = {
+          win_height = 12,
+          win_vheight = 12,
+          delay_syntax = 80,
+          border_chars = { '┃', '┃', '━', '━', '┏', '┓', '┗', '┛', '█' },
+        },
+        func_map = {
+          vsplit = '',
+          ptogglemode = 'z,',
+          stoggleup = '',
+        },
+        filter = {
+          fzf = {
+            action_for = { ['ctrl-s'] = 'split' },
+            extra_opts = { '--bind', 'ctrl-o:toggle-all', '--prompt', '> ' },
+          },
+        },
+      })
+    end,
+  }
+
+  -- Colorizer (highlight color codes)
+  use {
+    'NvChad/nvim-colorizer.lua',
+    config = function()
+      require('colorizer').setup({
+        filetypes = { '*' },
+        user_default_options = {
+          RGB = true,
+          RRGGBB = true,
+          names = true,
+          RRGGBBAA = true,
+          AARRGGBB = false,
+          rgb_fn = false,
+          hsl_fn = false,
+          css = false,
+          css_fn = false,
+          mode = 'background',
+          tailwind = false,
+          sass = { enable = false, parsers = { 'css' } },
+          virtualtext = '■',
+          always_update = false,
+        },
+        buftypes = {},
+      })
+    end,
+  }
+
   -- AI Coding Assistant - Codeium/Windsurf (free alternative to Copilot)
   use {
     'Exafunction/codeium.vim',
@@ -780,15 +964,7 @@ return require('packer').startup(function(use)
     -- Default keybindings: s (forward), S (backward), x (till forward), X (till backward), gs (from window)
   }
 
-  -- Better notifications
-  use {
-    'rcarriga/nvim-notify',
-    config = function()
-      vim.notify = require('notify')
-    end,
-  }
-
-  -- Better command UI and popup messages
+  -- Better command UI and popup messages (includes nvim-notify)
   use {
     'folke/noice.nvim',
     requires = {
@@ -824,14 +1000,6 @@ return require('packer').startup(function(use)
     end,
   }
 
-  -- Better code folding
-  use {
-    'kevinhwang91/nvim-ufo',
-    requires = { 'kevinhwang91/promise-async' },
-    config = function()
-      require('ufo').setup()
-    end,
-  }
 
   -- Quick file switching (harpoon)
   use {
@@ -874,13 +1042,17 @@ return require('packer').startup(function(use)
           timeout_ms = 5000,
           lsp_format = 'fallback',
         },
+        -- Don't show errors when formatters aren't available
+        notify_on_error = false,
         formatters_by_ft = {
           c = { 'clang-format' },
           cpp = { 'clang-format' },
           lua = { 'stylua' },
           go = { 'gofmt' },
           javascript = { 'prettier' },
+          javascriptreact = { 'prettier' },
           typescript = { 'prettier' },
+          typescriptreact = { 'prettier' },
           elixir = { 'mix' },
         },
         formatters = {
@@ -1053,10 +1225,14 @@ return require('packer').startup(function(use)
     'williamboman/mason.nvim',
     config = function()
       require('mason').setup()
+      -- Ensure Mason's bin directory is in PATH
+      local mason_path = vim.fn.stdpath('data') .. '/mason/bin'
+      vim.env.PATH = mason_path .. ':' .. vim.env.PATH
     end,
   }
 
   -- nvim-lspconfig (required by mason-nvim-dap)
+  -- LSP configuration is now in lua/lsp.lua
   use {
     'neovim/nvim-lspconfig',
   }

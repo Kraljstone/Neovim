@@ -4,6 +4,9 @@ local opts = { noremap = true, silent = true }
 vim.g.mapleader = ' '
 vim.g.maplocalleader = ' '
 
+-- LSP navigation is handled in lsp.lua with buffer-local keymaps
+-- Standard Neovim keybindings: gd (definition), gr (references), gD (declaration), gi (implementation)
+
 -- Better navigation
 map('n', 'j', 'jzz', opts)
 map('n', 'k', 'kzz', opts)
@@ -28,7 +31,13 @@ map('n', '<leader>fr', ':Telescope oldfiles<CR>', opts)
 map('n', '<leader>fe', ':Telescope file_browser<CR>', opts)  -- Telescope file browser
 
 -- Search
-map('n', '<leader>h', ':nohlsearch<CR>', opts)
+map('n', '<leader>H', ':nohlsearch<CR>', opts)  -- Clear highlights (Shift+H to avoid harpoon conflict)
+map('n', '<Esc>', function()
+  -- Clear search highlight when pressing Esc in normal mode
+  if vim.fn.mode() == 'n' then
+    vim.cmd('nohlsearch')
+  end
+end, { noremap = true, silent = true })
 
 -- File operations
 map('n', '<leader>w', ':w<CR>', opts)
@@ -67,6 +76,16 @@ map('n', '<leader>bp', ':BufferLineCyclePrev<CR>', opts)  -- Previous buffer
 map('n', '<leader>bc', ':bd<CR>', opts)                   -- Close current buffer (like X button)
 map('n', '<leader>bd', ':BufferLinePickClose<CR>', opts)  -- Pick and close buffer
 map('n', '<leader>bb', ':Telescope buffers<CR>', opts)   -- List all buffers
+map('n', '<leader>ba', function()
+  -- Close all buffers except the current one
+  local current_buf = vim.api.nvim_get_current_buf()
+  local buffers = vim.api.nvim_list_bufs()
+  for _, buf in ipairs(buffers) do
+    if vim.api.nvim_buf_is_valid(buf) and buf ~= current_buf then
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end
+  end
+end, opts)  -- Close all buffers except current
 
 -- Diagnostics
 map('n', '<leader>xx', ':TroubleToggle<CR>', opts)
@@ -97,3 +116,33 @@ map('n', '<leader>gh', ':DiffviewFileHistory<CR>', opts)  -- View file history
 map('n', '<leader>gs', ':Git<CR>', opts)  -- Open git status (fugitive)
 map('n', '<leader>gb', ':Git blame<CR>', opts)  -- View git blame
 map('n', '<leader>gl', ':Git log<CR>', opts)  -- View git log
+
+-- Undo tree
+map('n', '<leader>u', ':UndotreeToggle<CR>', opts)  -- Toggle undo tree
+
+-- Better paste handling
+-- Check if buffer is modifiable before pasting
+map('n', 'p', function()
+  if vim.bo.modifiable then
+    vim.cmd('normal! p')
+  else
+    vim.notify('Cannot paste: buffer is not modifiable', vim.log.levels.WARN)
+  end
+end, { noremap = true, silent = false })
+
+map('n', 'P', function()
+  if vim.bo.modifiable then
+    vim.cmd('normal! P')
+  else
+    vim.notify('Cannot paste: buffer is not modifiable', vim.log.levels.WARN)
+  end
+end, { noremap = true, silent = false })
+
+-- Visual mode paste (replace selection)
+map('v', 'p', function()
+  if vim.bo.modifiable then
+    vim.cmd('normal! "_dP')
+  else
+    vim.notify('Cannot paste: buffer is not modifiable', vim.log.levels.WARN)
+  end
+end, { noremap = true, silent = false })
